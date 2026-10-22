@@ -7,6 +7,8 @@ An Outlook add-in for a support team working out of a shared Office 365 mailbox.
 - If a person replies to the same thread several times, it counts as **1 case** for them
 - If several people reply on the same thread, **each of them** gets 1 case
 
+**No admin approval?** If your organisation won't approve the add-in's access to mail, use the [Outlook desktop macro](outlook-desktop-macro/README.md) instead. It works in classic Outlook for Windows with no app registration or hosting.
+
 The pane lists each person with their case count and total messages sent. Click a name to see the threads behind the count, and use **Download CSV** to export the table.
 
 ## How it works
