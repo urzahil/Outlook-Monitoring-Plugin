@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Team Case Counter</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <link rel="stylesheet" href="taskpane.css" />
+    <script type="module" src="taskpane.js"></script>
+  </head>
+  <body>
+    <main>
+      <h1>Team cases</h1>
+
+      <details id="settings">
+        <summary>Settings</summary>
+        <label>
+          App (client) ID
+          <input id="clientId" type="text" placeholder="From your Entra app registration" />
+        </label>
+        <label>
+          Directory (tenant) ID
+          <input id="tenantId" type="text" placeholder="From your Entra app registration" />
+        </label>
+        <label>
+          Shared mailbox address
+          <input id="mailbox" type="email" placeholder="support@yourcompany.com" required />
+        </label>
+        <label>
+          Team email domain
+          <input id="teamDomain" type="text" placeholder="yourcompany.com" required />
+        </label>
+        <label>
+          Addresses to ignore (comma separated)
+          <input id="excludedAddresses" type="text" placeholder="noreply@yourcompany.com" />
+        </label>
+        <button id="saveSettings" type="button" class="secondary">Save settings</button>
+      </details>
+
+      <fieldset>
+        <legend>Period</legend>
+        <label class="inline"><input type="radio" name="period" value="last7" checked /> Last 7 days</label>
+        <label class="inline"><input type="radio" name="period" value="last30" /> Last 30 days</label>
+        <label class="inline"><input type="radio" name="period" value="month" /> Calendar month</label>
+        <input id="month" type="month" disabled />
+      </fieldset>
+
+      <button id="run" type="button">Count cases</button>
+      <p id="status" role="status"></p>
+
+      <section id="results" hidden>
+        <h2 id="resultsTitle"></h2>
+        <p id="summary"></p>
+        <p id="warning" class="warning" hidden></p>
+        <table>
+          <thead>
+            <tr><th>Person</th><th class="num">Cases</th><th class="num">Messages</th></tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <button id="exportCsv" type="button" class="secondary">Download CSV</button>
+      </section>
+    </main>
+  </body>
+</html>

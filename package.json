@@ -1,0 +1,22 @@
+{
+  "name": "outlook-monitoring-plugin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Outlook add-in that counts how many support cases each team member handled in a shared mailbox.",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node scripts/build.mjs --serve",
+    "build:site": "node scripts/build.mjs --site",
+    "test": "node --test \"test/*.test.js\"",
+    "validate": "office-addin-manifest validate manifest.xml"
+  },
+  "dependencies": {
+    "@azure/msal-browser": "^4.30.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "office-addin-dev-certs": "^3.0.1",
+    "office-addin-manifest": "^3.0.1"
+  }
+}
