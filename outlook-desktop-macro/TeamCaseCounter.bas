@@ -31,17 +31,26 @@ Private scanned As Long
 Private rangeStart As Date
 Private rangeEnd As Date
 Private rangeLabel As String
+Private onlyNewThreads As Boolean    ' ignore threads started before rangeStart
+Private skipOwnThreads As Boolean    ' ignore threads started by the team
+Private threadVerdict As Object      ' conversation ID -> 0 ok, 1 too old, 2 ours
+Private skippedOld As Long
+Private skippedOwn As Long
 
 Public Sub CountTeamCases()
     Dim store As Outlook.store
     Set store = LoadSettings()
     If store Is Nothing Then Exit Sub
     If Not AskPeriod() Then Exit Sub
+    AskThreadOptions
 
     Set people = CreateObject("Scripting.Dictionary")
     Set allCases = CreateObject("Scripting.Dictionary")
+    Set threadVerdict = CreateObject("Scripting.Dictionary")
     unattributed = 0
     scanned = 0
+    skippedOld = 0
+    skippedOwn = 0
 
     ScanFolder store.GetRootFolder
     ShowReport store.DisplayName
@@ -166,6 +175,15 @@ Invalid:
     MsgBox "Type 7, 30, or a past month like " & Format(Date, "yyyy-mm") & ".", vbExclamation, "Team Case Counter"
 End Function
 
+Private Sub AskThreadOptions()
+    onlyNewThreads = (MsgBox("Only count threads that were started inside this period?" & vbCrLf & vbCrLf & _
+        "Yes = replies to threads started before " & Format(rangeStart, "d mmm yyyy") & " are not counted." & vbCrLf & _
+        "No  = every reply in the period is counted.", vbYesNo + vbQuestion, "Team Case Counter") = vbYes)
+    skipOwnThreads = (MsgBox("Ignore threads started by your own team?" & vbCrLf & vbCrLf & _
+        "Yes = only threads started by someone outside " & teamSuffix & " are counted." & vbCrLf & _
+        "No  = threads started by the team are counted too.", vbYesNo + vbQuestion, "Team Case Counter") = vbYes)
+End Sub
+
 ' ---------------------------------------------------------------- Counting
 
 Private Sub ScanFolder(folder As Outlook.folder)
@@ -201,6 +219,8 @@ Private Sub CountMessage(mail As Outlook.MailItem)
     conv = mail.ConversationID
     If conv = "" Then Exit Sub
     scanned = scanned + 1
+
+    If ThreadVerdictFor(mail, conv) <> 0 Then Exit Sub
 
     senderAddr = SenderAddress(mail)
     fromAddr = LCase$(Trim$(GetProp(mail, PR_FROM_SMTP)))
@@ -240,6 +260,51 @@ Private Sub CountMessage(mail As Outlook.MailItem)
     End If
     allCases(conv) = True
 End Sub
+
+' Decides once per conversation whether it is counted: 0 = yes, 1 = started
+' before the period, 2 = started by the team. The first message of the thread
+' is found with Outlook's conversation API, so it works across folders and even
+' when the start is older than the period. If it can't be found the thread is
+' counted rather than silently dropped.
+Private Function ThreadVerdictFor(mail As Outlook.MailItem, conv As String) As Long
+    Dim verdict As Long, root As Object, best As Object
+    Dim roots As Outlook.SimpleItems, i As Long, started As Date, bestDate As Date
+
+    If Not (onlyNewThreads Or skipOwnThreads) Then Exit Function
+    If threadVerdict.Exists(conv) Then
+        ThreadVerdictFor = threadVerdict(conv)
+        Exit Function
+    End If
+
+    On Error Resume Next
+    Set roots = mail.GetConversation.GetRootItems
+    If Not roots Is Nothing Then
+        For i = 1 To roots.count
+            Set root = roots.Item(i)
+            If TypeOf root Is Outlook.MailItem Then
+                started = root.SentOn
+                If best Is Nothing Or started < bestDate Then
+                    Set best = root
+                    bestDate = started
+                End If
+            End If
+        Next
+    End If
+    On Error GoTo 0
+
+    If Not best Is Nothing Then
+        If onlyNewThreads And bestDate < rangeStart Then
+            verdict = 1
+        ElseIf skipOwnThreads Then
+            If IsTeam(SenderAddress(best)) Or IsTeam(LCase$(Trim$(GetProp(best, PR_FROM_SMTP)))) Then verdict = 2
+        End If
+    End If
+
+    If verdict = 1 Then skippedOld = skippedOld + 1
+    If verdict = 2 Then skippedOwn = skippedOwn + 1
+    threadVerdict(conv) = verdict
+    ThreadVerdictFor = verdict
+End Function
 
 Private Function SenderAddress(mail As Outlook.MailItem) As String
     Dim addr As String
@@ -300,6 +365,12 @@ Private Sub ShowReport(mailboxName As String)
         "<h1>Team cases: " & Esc(rangeLabel) & "</h1>" & _
         "<p>" & Esc(mailboxName) & " &middot; " & Format(rangeStart, "d mmm yyyy") & " to " & Format(rangeEnd, "d mmm yyyy") & _
         " &middot; " & allCases.count & " distinct cases handled &middot; " & scanned & " messages scanned</p>"
+
+    If onlyNewThreads Or skipOwnThreads Then
+        html = html & "<p class=""muted"">Filters:" & _
+            IIf(onlyNewThreads, " only threads started in this period (" & skippedOld & " older " & IIf(skippedOld = 1, "thread", "threads") & " skipped).", "") & _
+            IIf(skipOwnThreads, " threads started by the team ignored (" & skippedOwn & " skipped).", "") & "</p>"
+    End If
 
     If unattributed > 0 Then
         html = html & "<p class=""warn"">" & unattributed & " team " & IIf(unattributed = 1, "reply was", "replies were") & _

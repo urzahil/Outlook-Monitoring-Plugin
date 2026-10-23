@@ -36,6 +36,13 @@ The first time, it asks for:
 
 It then asks for the period: `7` for the last 7 days, `30` for the last 30 days, or a calendar month such as `2026-09`. Outlook may stop responding for a few seconds while it counts a large mailbox.
 
+After the period, it asks two yes/no questions:
+
+- **Only count threads started in this period?** If yes, replies to threads whose first message is older than the period are ignored (for 7 days, a reply on a thread started 10 days ago doesn't count).
+- **Ignore threads started by your own team?** If yes, threads whose first message was sent by anyone at your team domain (including the shared mailbox) are ignored, so only threads started by outsiders count.
+
+The thread's first message is found with Outlook's conversation lookup, so it also works when the start is in another folder. If it can't be found, the thread is counted. The report shows how many threads each option skipped.
+
 Your settings are saved in the Windows registry for your user only, not in this repository. To change them, run `ResetTeamCaseSettings` the same way, then run `CountTeamCases` again.
 
 ## How replies must be sent
