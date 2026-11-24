@@ -3,7 +3,7 @@
 // With --site, builds into docs/ for GitHub Pages and writes a matching
 // manifest-github-pages.xml, so the add-in can be installed without Node.js.
 import * as esbuild from "esbuild";
-import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -38,10 +38,16 @@ if (serve) {
   // Office requires HTTPS; office-addin-dev-certs installs a trusted localhost certificate.
   const { getHttpsServerOptions } = await import("office-addin-dev-certs");
   const { cert, key } = await getHttpsServerOptions();
-  const certfile = join(tmpdir(), "addin-dev.crt");
-  const keyfile = join(tmpdir(), "addin-dev.key");
-  await writeFile(certfile, cert);
-  await writeFile(keyfile, key);
+  // The key is written to a private directory (mode 0700) with owner-only
+  // permissions, and removed again when the server stops.
+  const certDir = await mkdtemp(join(tmpdir(), "addin-dev-"));
+  const certfile = join(certDir, "localhost.crt");
+  const keyfile = join(certDir, "localhost.key");
+  await writeFile(certfile, cert, { mode: 0o600 });
+  await writeFile(keyfile, key, { mode: 0o600 });
+  const cleanup = () => rm(certDir, { recursive: true, force: true }).catch(() => {});
+  process.on("exit", () => rm(certDir, { recursive: true, force: true }).catch(() => {}));
+  for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => cleanup().finally(() => process.exit(0)));
 
   const ctx = await esbuild.context(options);
   await ctx.watch();

@@ -13,7 +13,9 @@ The pane lists each person with their case count and total messages sent. Click 
 
 ## How it works
 
-The add-in uses Microsoft Graph to read every message in the shared mailbox (all folders, including Sent Items) in the chosen period. It keeps only the messages sent by a team member and groups them by `conversationId`, so each person gets one case per distinct thread they replied on. Customer messages and drafts are ignored. A thread counts in a period if the person sent at least one message on it during that period.
+The add-in uses Microsoft Graph to read every message in the shared mailbox (all folders, including Sent Items, but not Deleted Items, Junk Email, Outbox, Drafts or Sync Issues) sent in the chosen period. Copies of one message filed in several folders are counted once. It keeps only the messages sent by a team member and groups them by `conversationId`, so each person gets one case per distinct thread they replied on. Customer messages and drafts are ignored. A thread counts in a period if the person sent at least one message on it during that period.
+
+Optional settings narrow the count: **Only include these team addresses** (for mailboxes that also receive requests from colleagues), **Only count threads started in this period**, and **Ignore threads started by your own team**. The last two look up each thread's first message, so they make the count slower.
 
 The counting rules are in `src/core/counting.js` and are covered by tests in `test/`.
 

@@ -21,6 +21,9 @@ Private Const PR_SENDER_SMTP As String = "http://schemas.microsoft.com/mapi/prop
 Private Const PR_SENDER_NAME As String = "http://schemas.microsoft.com/mapi/proptag/0x0C1A001F"
 Private Const PR_FROM_SMTP As String = "http://schemas.microsoft.com/mapi/proptag/0x5D02001F"
 Private Const PR_FROM_NAME As String = "http://schemas.microsoft.com/mapi/proptag/0x0042001F"
+Private Const PR_FROM_ENTRYID As String = "http://schemas.microsoft.com/mapi/proptag/0x00410102"
+Private Const PR_INTERNET_MESSAGE_ID As String = "http://schemas.microsoft.com/mapi/proptag/0x1035001F"
+Private Const PR_CLIENT_SUBMIT_TIME As String = "http://schemas.microsoft.com/mapi/proptag/0x00390040"
 
 Private teamSuffix As String
 Private ignored As Object       ' Scripting.Dictionary: addresses to ignore
@@ -30,12 +33,18 @@ Private unattributed As Long
 Private scanned As Long
 Private rangeStart As Date
 Private rangeEnd As Date
+Private rangeEndShown As Date        ' last day inside the period, for display
 Private rangeLabel As String
 Private onlyNewThreads As Boolean    ' ignore threads started before rangeStart
 Private skipOwnThreads As Boolean    ' ignore threads started by the team
 Private threadVerdict As Object      ' conversation ID -> 0 ok, 1 too old, 2 ours
 Private skippedOld As Long
 Private skippedOwn As Long
+Private skippedErrors As Long        ' items that couldn't be read (encrypted, protected, corrupt)
+Private duplicates As Long
+Private seenIds As Object            ' internet message ID -> True
+Private excludedFolders As Object    ' EntryID -> True: folders that are never counted
+Private itemsDone As Long
 
 Public Sub CountTeamCases()
     Dim store As Outlook.store
@@ -51,6 +60,12 @@ Public Sub CountTeamCases()
     scanned = 0
     skippedOld = 0
     skippedOwn = 0
+    skippedErrors = 0
+    duplicates = 0
+    itemsDone = 0
+    Set seenIds = CreateObject("Scripting.Dictionary")
+    Set excludedFolders = CreateObject("Scripting.Dictionary")
+    FindExcludedFolders store
 
     ScanFolder store.GetRootFolder
     ShowReport store.DisplayName
@@ -156,6 +171,7 @@ Private Function AskPeriod() As Boolean
         Case "7", "30"
             rangeEnd = Now
             rangeStart = rangeEnd - CLng(answer)
+            rangeEndShown = rangeEnd
             rangeLabel = "Last " & answer & " days"
         Case Else
             If Not answer Like "####-##" Then GoTo Invalid
@@ -165,7 +181,11 @@ Private Function AskPeriod() As Boolean
             rangeStart = DateSerial(y, m, 1)
             rangeEnd = DateSerial(y, m + 1, 1)
             If rangeStart > Now Then GoTo Invalid
-            If rangeEnd > Now Then rangeEnd = Now
+            rangeEndShown = rangeEnd - 1 / 86400   ' the last second of the month
+            If rangeEnd > Now Then
+                rangeEnd = Now
+                rangeEndShown = Now
+            End If
             rangeLabel = Format(rangeStart, "mmmm yyyy")
     End Select
     AskPeriod = True
@@ -186,44 +206,112 @@ End Sub
 
 ' ---------------------------------------------------------------- Counting
 
+' Date as text for a DASL filter: fixed layout, UTC, no locale-dependent
+' separators or AM/PM (which made Restrict fail silently on non-US systems).
+Private Function DaslDate(folder As Outlook.folder, d As Date) As String
+    Dim u As Date
+    u = folder.PropertyAccessor.LocalTimeToUTC(d)
+    DaslDate = Year(u) & "-" & Two(Month(u)) & "-" & Two(Day(u)) & " " & _
+        Two(Hour(u)) & ":" & Two(Minute(u)) & ":" & Two(Second(u))
+End Function
+
+Private Function Two(ByVal n As Long) As String
+    Two = Right$("0" & n, 2)
+End Function
+
+' Remembers the folders whose mail must not be counted: deleted mistakes, spoofed
+' mail in Junk, and unsent or failed items.
+Private Sub FindExcludedFolders(store As Outlook.store)
+    Dim kind As Variant, f As Outlook.folder
+    ' Deleted Items, Outbox, Drafts, Junk, Conflicts, Local Failures, Server Failures, Sync Issues
+    For Each kind In Array(3, 4, 16, 23, 19, 21, 22, 20)
+        Set f = Nothing
+        On Error Resume Next
+        Set f = store.GetDefaultFolder(kind)
+        On Error GoTo 0
+        If Not f Is Nothing Then excludedFolders(f.EntryID) = True
+    Next
+End Sub
+
+Private Function IsExcludedFolder(folder As Outlook.folder) As Boolean
+    If excludedFolders.Exists(folder.EntryID) Then IsExcludedFolder = True: Exit Function
+    IsExcludedFolder = (folder.Name = "Sync Issues")
+End Function
+
 Private Sub ScanFolder(folder As Outlook.folder)
     Dim items As Outlook.items, item As Object, subFolder As Outlook.folder
+    Dim i As Long, query As String
+
+    If IsExcludedFolder(folder) Then Exit Sub
 
     If folder.DefaultItemType = olMailItem Then
         ' Some system folders can't be filtered; skip those.
         On Error Resume Next
-        Set items = folder.items.Restrict( _
-            "[SentOn] >= '" & Format(rangeStart, "ddddd h:nn AMPM") & "' AND " & _
-            "[SentOn] < '" & Format(rangeEnd, "ddddd h:nn AMPM") & "'")
+        query = "@SQL=""" & PR_CLIENT_SUBMIT_TIME & """ >= '" & DaslDate(folder, rangeStart) & "' AND " & _
+            """" & PR_CLIENT_SUBMIT_TIME & """ < '" & DaslDate(folder, rangeEnd) & "'"
+        If Err.Number = 0 Then Set items = folder.items.Restrict(query)
+        Err.Clear
         On Error GoTo 0
         If Not items Is Nothing Then
-            For Each item In items
-                If TypeOf item Is Outlook.MailItem Then CountMessage item
+            For i = 1 To items.count
+                ' Outlook allows only about 250 open items per session: release each one.
+                Set item = Nothing
+                On Error Resume Next
+                Set item = items.item(i)
+                On Error GoTo 0
+                If Not item Is Nothing Then
+                    If TypeOf item Is Outlook.MailItem Then CountMessage item
+                End If
+                Set item = Nothing
+                itemsDone = itemsDone + 1
+                If itemsDone Mod 100 = 0 Then DoEvents
             Next
         End If
+        Set items = Nothing
     End If
 
     ' Skip subfolders Outlook can't open rather than stopping the whole count.
     On Error Resume Next
     For Each subFolder In folder.Folders
         ScanFolder subFolder
+        Set subFolder = Nothing
     Next
 End Sub
 
+' One unreadable item (S/MIME-encrypted, IRM-protected, corrupt) must not stop the scan.
 Private Sub CountMessage(mail As Outlook.MailItem)
+    On Error GoTo Skip
+    CountMessageCore mail
+    Exit Sub
+Skip:
+    skippedErrors = skippedErrors + 1
+    Err.Clear
+End Sub
+
+Private Sub CountMessageCore(mail As Outlook.MailItem)
     Dim senderAddr As String, fromAddr As String
-    Dim who As String, whoName As String, conv As String
+    Dim who As String, whoName As String, conv As String, msgId As String
     Dim person As Object, threads As Object, thread As Variant
 
     If Not mail.Sent Then Exit Sub   ' drafts
     conv = mail.ConversationID
     If conv = "" Then Exit Sub
+
+    ' The same message can be filed in several folders (rules, CC to the shared mailbox).
+    msgId = GetProp(mail, PR_INTERNET_MESSAGE_ID)
+    If msgId <> "" Then
+        If seenIds.Exists(msgId) Then
+            duplicates = duplicates + 1
+            Exit Sub
+        End If
+        seenIds(msgId) = True
+    End If
     scanned = scanned + 1
 
     If ThreadVerdictFor(mail, conv) <> 0 Then Exit Sub
 
     senderAddr = SenderAddress(mail)
-    fromAddr = LCase$(Trim$(GetProp(mail, PR_FROM_SMTP)))
+    fromAddr = FromAddress(mail)
 
     ' The sender is checked first so "Send on behalf of" replies (sent from the
     ' shared mailbox by a person) are credited to the person.
@@ -288,20 +376,23 @@ Private Function ThreadVerdictFor(mail As Outlook.MailItem, conv As String) As L
                     bestDate = started
                 End If
             End If
+            Set root = Nothing   ' don't keep hundreds of items open
         Next
     End If
+    Set roots = Nothing
     On Error GoTo 0
 
     If Not best Is Nothing Then
         If onlyNewThreads And bestDate < rangeStart Then
             verdict = 1
         ElseIf skipOwnThreads Then
-            If IsTeam(SenderAddress(best)) Or IsTeam(LCase$(Trim$(GetProp(best, PR_FROM_SMTP)))) Then verdict = 2
+            If IsTeam(SenderAddress(best)) Or IsTeam(FromAddress(best)) Then verdict = 2
         End If
     End If
 
     If verdict = 1 Then skippedOld = skippedOld + 1
     If verdict = 2 Then skippedOwn = skippedOwn + 1
+    Set best = Nothing
     threadVerdict(conv) = verdict
     ThreadVerdictFor = verdict
 End Function
@@ -319,6 +410,29 @@ Private Function SenderAddress(mail As Outlook.MailItem) As String
         On Error GoTo 0
     End If
     SenderAddress = LCase$(Trim$(addr))
+End Function
+
+' The mailbox a message was sent from. Internal Exchange senders have no SMTP
+' property, so fall back to resolving the "sent representing" address entry.
+Private Function FromAddress(mail As Outlook.MailItem) As String
+    Dim addr As String, entry As Outlook.AddressEntry, id As String
+    addr = GetProp(mail, PR_FROM_SMTP)
+    If addr = "" Then
+        On Error Resume Next
+        id = mail.PropertyAccessor.BinaryToString(mail.PropertyAccessor.GetProperty(PR_FROM_ENTRYID))
+        If id <> "" Then
+            Set entry = Application.Session.GetAddressEntryFromID(id)
+            If Not entry Is Nothing Then
+                If entry.AddressEntryUserType = olExchangeUserAddressEntry Or entry.AddressEntryUserType = olExchangeRemoteUserAddressEntry Then
+                    addr = entry.GetExchangeUser().PrimarySmtpAddress
+                Else
+                    addr = entry.Address
+                End If
+            End If
+        End If
+        On Error GoTo 0
+    End If
+    FromAddress = LCase$(Trim$(addr))
 End Function
 
 Private Function GetProp(mail As Outlook.MailItem, tag As String) As String
@@ -345,7 +459,7 @@ End Function
 Private Sub ShowReport(mailboxName As String)
     Dim order As Variant, i As Long, j As Long, tmp As Variant
     Dim person As Object, threads As Object, conv As Variant, thread As Variant
-    Dim html As String, csv As String, folderPath As String
+    Dim html As String, csv As String, folderPath As String, stamp As String, csvName As String
 
     ' Sort people by number of cases, highest first.
     order = people.keys
@@ -357,19 +471,29 @@ Private Sub ShowReport(mailboxName As String)
         Next
     Next
 
+    ' A new file name every run: Excel locks an open CSV, so overwriting it would fail.
+    stamp = Format(Now, "yyyymmdd") & "-" & Format(Now, "hhnnss")
+    csvName = "TeamCaseCounter-" & stamp & ".csv"
+
     html = "<!doctype html><html><head><meta charset=""utf-8""><title>Team cases - " & Esc(rangeLabel) & "</title>" & _
         "<style>body{font:14px/1.4 'Segoe UI',sans-serif;color:#242424;margin:24px;max-width:760px}" & _
         "table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #ddd;vertical-align:top}" & _
         ".num{text-align:right}.muted{color:#616161;font-size:12px}.warn{background:#fff4ce;padding:8px;border-radius:4px}" & _
         "ul{margin:4px 0 0;padding-left:18px}</style></head><body>" & _
         "<h1>Team cases: " & Esc(rangeLabel) & "</h1>" & _
-        "<p>" & Esc(mailboxName) & " &middot; " & Format(rangeStart, "d mmm yyyy") & " to " & Format(rangeEnd, "d mmm yyyy") & _
+        "<p>" & Esc(mailboxName) & " &middot; " & Format(rangeStart, "d mmm yyyy") & " to " & Format(rangeEndShown, "d mmm yyyy") & _
         " &middot; " & allCases.count & " distinct cases handled &middot; " & scanned & " messages scanned</p>"
 
     If onlyNewThreads Or skipOwnThreads Then
         html = html & "<p class=""muted"">Filters:" & _
             IIf(onlyNewThreads, " only threads started in this period (" & skippedOld & " older " & IIf(skippedOld = 1, "thread", "threads") & " skipped).", "") & _
             IIf(skipOwnThreads, " threads started by the team ignored (" & skippedOwn & " skipped).", "") & "</p>"
+    End If
+
+    If duplicates > 0 Or skippedErrors > 0 Then
+        html = html & "<p class=""muted"">" & _
+            IIf(duplicates > 0, duplicates & " duplicate " & IIf(duplicates = 1, "copy", "copies") & " ignored. ", "") & _
+            IIf(skippedErrors > 0, skippedErrors & " " & IIf(skippedErrors = 1, "message", "messages") & " couldn't be read (encrypted or protected) and " & IIf(skippedErrors = 1, "was", "were") & " skipped.", "") & "</p>"
     End If
 
     If unattributed > 0 Then
@@ -400,12 +524,12 @@ Private Sub ShowReport(mailboxName As String)
             "<td class=""num"">" & person("messages") & "</td></tr>"
         csv = csv & CsvField(person("name")) & "," & CsvField(order(i)) & "," & threads.count & "," & person("messages") & vbCrLf
     Next
-    html = html & "</table><p><a href=""TeamCaseCounter.csv"">Open as a spreadsheet (CSV)</a></p></body></html>"
+    html = html & "</table><p><a href=""" & csvName & """ download=""" & csvName & """>Open as a spreadsheet (CSV)</a></p></body></html>"
 
     folderPath = Environ$("TEMP") & "\"
-    WriteUtf8 folderPath & "TeamCaseCounter.html", html
-    WriteUtf8 folderPath & "TeamCaseCounter.csv", csv
-    CreateObject("Shell.Application").ShellExecute folderPath & "TeamCaseCounter.html"
+    WriteUtf8 folderPath & "TeamCaseCounter-" & stamp & ".html", html
+    WriteUtf8 folderPath & csvName, csv
+    CreateObject("Shell.Application").ShellExecute folderPath & "TeamCaseCounter-" & stamp & ".html"
 End Sub
 
 Private Function Esc(ByVal text As String) As String
@@ -415,7 +539,12 @@ Private Function Esc(ByVal text As String) As String
     Esc = Replace(text, """", "&quot;")
 End Function
 
+' Quotes a CSV text cell. A leading = + - @ (or tab / carriage return) would be
+' run as a formula by Excel, and display names come from email headers.
 Private Function CsvField(ByVal text As String) As String
+    Dim first As String
+    first = Left$(text, 1)
+    If first = "=" Or first = "+" Or first = "-" Or first = "@" Or first = vbTab Or first = vbCr Then text = "'" & text
     CsvField = """" & Replace(text, """", """""") & """"
 End Function
 

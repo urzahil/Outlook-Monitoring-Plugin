@@ -29,3 +29,9 @@ test("a month must be chosen", () => {
 test("toMonthValue pads the month", () => {
   assert.equal(toMonthValue(new Date(2026, 0, 5)), "2026-01");
 });
+
+test("a full month is displayed up to its last day", () => {
+  const range = getDateRange("month", { now, month: "2026-02" });
+  assert.equal(range.displayEnd.getDate(), 28);
+  assert.equal(range.displayEnd.getMonth(), 1);
+});

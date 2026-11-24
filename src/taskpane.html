@@ -3,6 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' https://appsforoffice.microsoft.com; connect-src 'self' https://graph.microsoft.com https://login.microsoftonline.com; style-src 'self'; img-src 'self' data:; frame-src https://login.microsoftonline.com; base-uri 'none'; form-action 'none'; object-src 'none'"
+    />
     <title>Team Case Counter</title>
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
     <link rel="stylesheet" href="taskpane.css" />
@@ -34,6 +38,12 @@
           Addresses to ignore (comma separated)
           <input id="excludedAddresses" type="text" placeholder="noreply@yourcompany.com" />
         </label>
+        <label>
+          Only include these team addresses (comma separated, optional)
+          <input id="allowedAddresses" type="text" placeholder="alice@yourcompany.com, bob@yourcompany.com" />
+        </label>
+        <label class="inline"><input id="onlyNewThreads" type="checkbox" /> Only count threads started in this period</label>
+        <label class="inline"><input id="skipOwnThreads" type="checkbox" /> Ignore threads started by your own team</label>
         <button id="saveSettings" type="button" class="secondary">Save settings</button>
       </details>
 
@@ -46,11 +56,13 @@
       </fieldset>
 
       <button id="run" type="button">Count cases</button>
+      <button id="cancel" type="button" class="secondary" hidden>Cancel</button>
       <p id="status" role="status"></p>
 
       <section id="results" hidden>
         <h2 id="resultsTitle"></h2>
         <p id="summary"></p>
+        <p id="notes" class="muted" hidden></p>
         <p id="warning" class="warning" hidden></p>
         <table>
           <thead>
