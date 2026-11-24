@@ -167,7 +167,7 @@ export function countCases(messages, options) {
  */
 export function csvText(value) {
   let text = String(value);
-  if (/^[=+\-@\t\r]/.test(text)) text = "'" + text;
+  if (/^\s*[=+\-@＝]/.test(text) || /^[\t\r\n]/.test(text)) text = "'" + text;
   return `"${text.replace(/"/g, '""')}"`;
 }
 

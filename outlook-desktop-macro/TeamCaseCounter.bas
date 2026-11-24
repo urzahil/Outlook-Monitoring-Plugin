@@ -243,6 +243,7 @@ Private Sub ScanFolder(folder As Outlook.folder)
     Dim i As Long, query As String
 
     If IsExcludedFolder(folder) Then Exit Sub
+    On Error GoTo FolderFailed
 
     If folder.DefaultItemType = olMailItem Then
         ' Some system folders can't be filtered; skip those.
@@ -271,15 +272,19 @@ Private Sub ScanFolder(folder As Outlook.folder)
     End If
 
     ' Skip subfolders Outlook can't open rather than stopping the whole count.
-    On Error Resume Next
     For Each subFolder In folder.Folders
         ScanFolder subFolder
         Set subFolder = Nothing
     Next
+    Exit Sub
+
+FolderFailed:
+    skippedErrors = skippedErrors + 1
+    Err.Clear
 End Sub
 
 ' One unreadable item (S/MIME-encrypted, IRM-protected, corrupt) must not stop the scan.
-Private Sub CountMessage(mail As Outlook.MailItem)
+Private Sub CountMessage(ByVal mail As Outlook.MailItem)
     On Error GoTo Skip
     CountMessageCore mail
     Exit Sub
@@ -288,7 +293,7 @@ Skip:
     Err.Clear
 End Sub
 
-Private Sub CountMessageCore(mail As Outlook.MailItem)
+Private Sub CountMessageCore(ByVal mail As Outlook.MailItem)
     Dim senderAddr As String, fromAddr As String
     Dim who As String, whoName As String, conv As String, msgId As String
     Dim person As Object, threads As Object, thread As Variant
@@ -354,7 +359,7 @@ End Sub
 ' is found with Outlook's conversation API, so it works across folders and even
 ' when the start is older than the period. If it can't be found the thread is
 ' counted rather than silently dropped.
-Private Function ThreadVerdictFor(mail As Outlook.MailItem, conv As String) As Long
+Private Function ThreadVerdictFor(ByVal mail As Outlook.MailItem, conv As String) As Long
     Dim verdict As Long, root As Object, best As Object
     Dim roots As Outlook.SimpleItems, i As Long, started As Date, bestDate As Date
 
@@ -397,7 +402,7 @@ Private Function ThreadVerdictFor(mail As Outlook.MailItem, conv As String) As L
     ThreadVerdictFor = verdict
 End Function
 
-Private Function SenderAddress(mail As Outlook.MailItem) As String
+Private Function SenderAddress(ByVal mail As Outlook.MailItem) As String
     Dim addr As String
     addr = GetProp(mail, PR_SENDER_SMTP)
     If addr = "" Then
@@ -414,7 +419,7 @@ End Function
 
 ' The mailbox a message was sent from. Internal Exchange senders have no SMTP
 ' property, so fall back to resolving the "sent representing" address entry.
-Private Function FromAddress(mail As Outlook.MailItem) As String
+Private Function FromAddress(ByVal mail As Outlook.MailItem) As String
     Dim addr As String, entry As Outlook.AddressEntry, id As String
     addr = GetProp(mail, PR_FROM_SMTP)
     If addr = "" Then
@@ -435,12 +440,12 @@ Private Function FromAddress(mail As Outlook.MailItem) As String
     FromAddress = LCase$(Trim$(addr))
 End Function
 
-Private Function GetProp(mail As Outlook.MailItem, tag As String) As String
+Private Function GetProp(ByVal mail As Outlook.MailItem, tag As String) As String
     On Error Resume Next
     GetProp = mail.PropertyAccessor.GetProperty(tag)
 End Function
 
-Private Function SubjectOf(mail As Outlook.MailItem) As String
+Private Function SubjectOf(ByVal mail As Outlook.MailItem) As String
     SubjectOf = mail.ConversationTopic
     If SubjectOf = "" Then SubjectOf = mail.Subject
     If SubjectOf = "" Then SubjectOf = "(no subject)"
@@ -544,7 +549,7 @@ End Function
 Private Function CsvField(ByVal text As String) As String
     Dim first As String
     first = Left$(text, 1)
-    If first = "=" Or first = "+" Or first = "-" Or first = "@" Or first = vbTab Or first = vbCr Then text = "'" & text
+    If first = "=" Or first = "+" Or first = "-" Or first = "@" Or first = vbTab Or first = vbCr Or first = vbLf Then text = "'" & text
     CsvField = """" & Replace(text, """", """""") & """"
 End Function
 

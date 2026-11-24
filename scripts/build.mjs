@@ -3,7 +3,8 @@
 // With --site, builds into docs/ for GitHub Pages and writes a matching
 // manifest-github-pages.xml, so the add-in can be installed without Node.js.
 import * as esbuild from "esbuild";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { rmSync } from "node:fs";
+import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -45,9 +46,8 @@ if (serve) {
   const keyfile = join(certDir, "localhost.key");
   await writeFile(certfile, cert, { mode: 0o600 });
   await writeFile(keyfile, key, { mode: 0o600 });
-  const cleanup = () => rm(certDir, { recursive: true, force: true }).catch(() => {});
-  process.on("exit", () => rm(certDir, { recursive: true, force: true }).catch(() => {}));
-  for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => cleanup().finally(() => process.exit(0)));
+  process.on("exit", () => rmSync(certDir, { recursive: true, force: true }));
+  for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => process.exit(0));
 
   const ctx = await esbuild.context(options);
   await ctx.watch();

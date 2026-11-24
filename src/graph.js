@@ -56,10 +56,12 @@ async function graphGet(url, token, signal) {
     } catch {
       // Non-JSON error body.
     }
-    if (response.status === 403 || response.status === 404) {
-      throw new Error(`Cannot read the mailbox (${response.status}). Check the address and that you have Full Access to it. ${detail}`);
-    }
-    throw new Error(`Microsoft Graph request failed (${response.status}). ${detail}`);
+    const error =
+      response.status === 403 || response.status === 404
+        ? new Error(`Cannot read the mailbox (${response.status}). Check the address and that you have Full Access to it. ${detail}`)
+        : new Error(`Microsoft Graph request failed (${response.status}). ${detail}`);
+    error.status = response.status;
+    throw error;
   }
 }
 
@@ -72,9 +74,10 @@ async function excludedFolderIds(mailbox, token, signal) {
       try {
         return (await graphGet(`${userUrl(mailbox)}/mailFolders/${name}?$select=id`, token, signal)).id;
       } catch (error) {
-        if (error?.name === "AbortError") throw error;
-        // Only a real access problem on the mailbox itself matters; the messages query reports it.
-        return null;
+        // A mailbox without that folder is fine; anything else would silently let
+        // Deleted Items or Junk be counted, so report it.
+        if (error?.status === 404) return null;
+        throw error;
       }
     })
   );
@@ -139,17 +142,25 @@ export async function fetchThreadStarts({ mailbox, conversationIds, excludedFold
         $filter: `conversationId eq '${id.replace(/'/g, "''")}'`,
         $top: "100",
       });
-      const page = await graphGet(`${userUrl(mailbox)}/messages?${params}`, token, signal);
       let first = null;
-      for (const message of page.value) {
-        if (message.isDraft || !message.sentDateTime || excludedFolders?.has(message.parentFolderId)) continue;
-        if (!first || message.sentDateTime < first.sentDateTime) first = message;
+      for (let url = `${userUrl(mailbox)}/messages?${params}`; url; ) {
+        const page = await graphGet(url, token, signal);
+        for (const message of page.value) {
+          if (message.isDraft || !message.sentDateTime || excludedFolders?.has(message.parentFolderId)) continue;
+          if (!first || message.sentDateTime < first.sentDateTime) first = message;
+        }
+        url = page["@odata.nextLink"];
       }
       if (first) starts.set(id, first);
       onProgress?.(++done, conversationIds.size);
     }
   }
 
-  await Promise.all(Array.from({ length: 4 }, worker));
+  try {
+    await Promise.all(Array.from({ length: 4 }, worker));
+  } catch (error) {
+    queue.length = 0; // stop the other workers
+    throw error;
+  }
   return starts;
 }
